@@ -1,39 +1,27 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { useSession, signIn } from 'next-auth/react'
-import { Send, User, Bot } from 'lucide-react'
+import { useSession } from 'next-auth/react'
+import { useRouter } from 'next/navigation'
 
 interface Message {
-  id: string
-  content: string
   role: 'user' | 'assistant'
-  timestamp: Date
+  content: string
 }
 
 interface ChatInterfaceProps {
-  className?: string
+  initialQuestionCount: number
 }
 
-export default function ChatInterface({ className = '' }: ChatInterfaceProps) {
+export default function ChatInterface({ initialQuestionCount }: ChatInterfaceProps) {
   const { data: session } = useSession()
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      content: 'Bonjour, je suis votre assistant juridique IA. Comment puis-je vous aider dans votre procédure de divorce aujourd\'hui ?',
-      role: 'assistant',
-      timestamp: new Date()
-    }
-  ])
+  const router = useRouter()
+  const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
-  const [conversationId, setConversationId] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [questionCount, setQuestionCount] = useState(initialQuestionCount)
+  const [showAuthRequired, setShowAuthRequired] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const [typingMessage, setTypingMessage] = useState<string>('')
-
-  // Compter les questions de l'utilisateur (pour la limite)
-  const userMessageCount = messages.filter(m => m.role === 'user').length
-  const isLimitReached = !session && userMessageCount >= 2
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -41,39 +29,32 @@ export default function ChatInterface({ className = '' }: ChatInterfaceProps) {
 
   useEffect(() => {
     scrollToBottom()
-  }, [messages, typingMessage])
+  }, [messages])
 
-  // Effet machine à écrire
-  const typeMessage = (text: string, onComplete: () => void) => {
-    let index = 0
-    setTypingMessage('')
-    
-    const typeInterval = setInterval(() => {
-      if (index < text.length) {
-        setTypingMessage(text.slice(0, index + 1))
-        index++
-      } else {
-        clearInterval(typeInterval)
-        onComplete()
-      }
-    }, 30) // Vitesse de frappe : 30ms par caractère
+  const typewriterEffect = async (text: string, callback: (char: string) => void) => {
+    for (let i = 0; i < text.length; i++) {
+      callback(text[i])
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
-    if (!input.trim() || isLoading || isLimitReached) return
+    if (!input.trim() || loading) return
 
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      content: input,
-      role: 'user',
-      timestamp: new Date()
+    // Vérifier la limite de questions pour les non-connectés
+    if (!session && questionCount >= 2) {
+      setShowAuthRequired(true)
+      return
     }
 
-    setMessages(prev => [...prev, userMessage])
+    const userMessage = input.trim()
     setInput('')
-    setIsLoading(true)
+    setMessages(prev => [...prev, { role: 'user', content: userMessage }])
+    setLoading(true)
+
+    // Ajouter un message assistant vide qui sera rempli progressivement
+    setMessages(prev => [...prev, { role: 'assistant', content: '' }])
 
     try {
       const response = await fetch('/api/chat', {
@@ -81,198 +62,127 @@ export default function ChatInterface({ className = '' }: ChatInterfaceProps) {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          message: input,
-          conversationId: conversationId
-        }),
+        body: JSON.stringify({ message: userMessage }),
       })
-
-      const data = await response.json()
-
-      if (response.status === 403) {
-        // Limite atteinte
-        setMessages(prev => [...prev, {
-          id: Date.now().toString(),
-          content: 'Vous avez atteint la limite de 2 questions gratuites. Veuillez vous connecter ou créer un compte pour continuer.',
-          role: 'assistant',
-          timestamp: new Date()
-        }])
-        return
-      }
 
       if (!response.ok) {
-        throw new Error(data.error || 'Erreur lors de l\'envoi du message')
+        const error = await response.json()
+        throw new Error(error.error || 'Erreur lors de l\'envoi du message')
       }
 
-      if (data.conversationId) {
-        setConversationId(data.conversationId)
-      }
-
-      // Ajouter la réponse avec effet machine à écrire
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        content: data.message,
-        role: 'assistant',
-        timestamp: new Date()
-      }
-
-      typeMessage(data.message, () => {
-        setMessages(prev => [...prev, assistantMessage])
-        setTypingMessage('')
+      const data = await response.json()
+      
+      // Effet machine à écrire
+      let currentText = ''
+      await typewriterEffect(data.response, (char) => {
+        currentText += char
+        setMessages(prev => {
+          const newMessages = [...prev]
+          newMessages[newMessages.length - 1] = {
+            role: 'assistant',
+            content: currentText
+          }
+          return newMessages
+        })
       })
 
+      // Incrémenter le compteur de questions
+      setQuestionCount(prev => prev + 1)
     } catch (error) {
       console.error('Erreur:', error)
-      setMessages(prev => [...prev, {
-        id: Date.now().toString(),
-        content: 'Désolé, une erreur s\'est produite. Veuillez réessayer.',
-        role: 'assistant',
-        timestamp: new Date()
-      }])
-      setTypingMessage('')
+      setMessages(prev => {
+        const newMessages = [...prev]
+        newMessages[newMessages.length - 1] = {
+          role: 'assistant',
+          content: 'Désolé, une erreur est survenue. Veuillez réessayer.'
+        }
+        return newMessages
+      })
     } finally {
-      setIsLoading(false)
+      setLoading(false)
     }
   }
 
-  const handleSignIn = () => {
-    signIn()
-  }
-
   return (
-    <div className={`flex flex-col h-full bg-white rounded-lg shadow-lg ${className}`}>
-      {/* Header */}
-      <div className="p-4 border-b border-gray-200 bg-primary text-white rounded-t-lg">
-        <h3 className="text-xl font-bold">Avocat IA - Divorce</h3>
-        {session && (
-          <p className="text-sm opacity-90">
-            Connecté en tant que {session.user.prenom} {session.user.nom}
-          </p>
-        )}
-      </div>
-
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.map((message) => (
-          <div
-            key={message.id}
-            className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-          >
-            <div
-              className={`flex items-start space-x-2 max-w-[80%] ${
-                message.role === 'user' ? 'flex-row-reverse space-x-reverse' : ''
-              }`}
-            >
-              <div
-                className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                  message.role === 'user'
-                    ? 'bg-primary text-white'
-                    : 'bg-gray-200 text-gray-600'
-                }`}
-              >
-                {message.role === 'user' ? (
-                  <User className="w-4 h-4" />
-                ) : (
-                  <Bot className="w-4 h-4" />
-                )}
-              </div>
-              <div
-                className={`rounded-lg p-3 ${
-                  message.role === 'user'
-                    ? 'bg-primary text-white'
-                    : 'bg-gray-100 text-gray-800'
-                }`}
-              >
-                <p className="whitespace-pre-wrap">{message.content}</p>
-                <p
-                  className={`text-xs mt-1 ${
+    <section className="py-12 bg-gray-50" id="chat">
+      <div className="container mx-auto px-4">
+        <div className="max-w-4xl mx-auto bg-white rounded-xl shadow-lg p-6">
+          <h3 className="text-2xl font-bold text-primary mb-6 text-center">Avocat du divorce IA</h3>
+          <div className="space-y-4">
+            {/* Message de bienvenue */}
+            <div className="bg-blue-50 rounded-lg p-4">
+              <p className="text-gray-700">
+                Bonjour, je suis votre assistant juridique IA. Comment puis-je vous aider dans votre procédure de divorce aujourd&apos;hui ?
+              </p>
+            </div>
+            
+            {/* Messages du chat */}
+            <div className="space-y-4 min-h-[200px] max-h-[500px] overflow-y-auto">
+              {messages.map((message, index) => (
+                <div
+                  key={index}
+                  className={`rounded-lg p-4 ${
                     message.role === 'user'
-                      ? 'text-blue-100'
-                      : 'text-gray-500'
+                      ? 'bg-gray-100 ml-8'
+                      : 'bg-blue-50 mr-8'
                   }`}
                 >
-                  {message.timestamp.toLocaleTimeString('fr-FR', {
-                    hour: '2-digit',
-                    minute: '2-digit'
-                  })}
+                  <p className="text-gray-700 whitespace-pre-wrap">{message.content}</p>
+                </div>
+              ))}
+              <div ref={messagesEndRef} />
+            </div>
+            
+            {/* Zone d'input */}
+            {!showAuthRequired ? (
+              <form onSubmit={handleSubmit} className="flex space-x-4">
+                <input
+                  type="text"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder="Posez votre question juridique..."
+                  className="flex-1 border border-gray-300 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary"
+                  disabled={loading}
+                />
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="bg-primary hover:bg-blue-800 text-white font-medium px-6 py-3 rounded-lg transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {loading ? 'Envoi...' : 'Envoyer'}
+                </button>
+              </form>
+            ) : (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-center">
+                <p className="text-yellow-800 mb-4">
+                  Vous avez atteint la limite de 2 questions gratuites. Veuillez vous connecter ou créer un compte pour continuer.
                 </p>
-              </div>
-            </div>
-          </div>
-        ))}
-
-        {/* Message en cours de frappe */}
-        {typingMessage && (
-          <div className="flex justify-start">
-            <div className="flex items-start space-x-2 max-w-[80%]">
-              <div className="w-8 h-8 rounded-full bg-gray-200 text-gray-600 flex items-center justify-center">
-                <Bot className="w-4 h-4" />
-              </div>
-              <div className="rounded-lg p-3 bg-gray-100 text-gray-800">
-                <p className="whitespace-pre-wrap">{typingMessage}</p>
-                <div className="inline-block w-2 h-4 bg-gray-600 animate-pulse ml-1"></div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Indicateur de chargement */}
-        {isLoading && !typingMessage && (
-          <div className="flex justify-start">
-            <div className="flex items-start space-x-2 max-w-[80%]">
-              <div className="w-8 h-8 rounded-full bg-gray-200 text-gray-600 flex items-center justify-center">
-                <Bot className="w-4 h-4" />
-              </div>
-              <div className="rounded-lg p-3 bg-gray-100 text-gray-800">
-                <div className="flex space-x-1">
-                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                <div className="flex space-x-4 justify-center">
+                  <button
+                    onClick={() => router.push('/auth/signin')}
+                    className="bg-primary hover:bg-blue-800 text-white px-4 py-2 rounded-lg"
+                  >
+                    Connexion
+                  </button>
+                  <button
+                    onClick={() => router.push('/auth/signup')}
+                    className="bg-secondary hover:bg-red-700 text-white px-4 py-2 rounded-lg"
+                  >
+                    S&apos;inscrire
+                  </button>
                 </div>
               </div>
-            </div>
-          </div>
-        )}
-
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Input */}
-      {isLimitReached ? (
-        <div className="p-4 border-t border-gray-200 bg-yellow-50">
-          <div className="text-center">
-            <p className="text-yellow-800 mb-4">
-              Vous avez atteint la limite de 2 questions gratuites.
-            </p>
-            <button
-              onClick={handleSignIn}
-              className="bg-primary hover:bg-blue-800 text-white px-6 py-2 rounded-lg font-medium transition duration-300"
-            >
-              Se connecter pour continuer
-            </button>
+            )}
+            
+            {/* Indicateur de questions restantes pour non-connectés */}
+            {!session && !showAuthRequired && (
+              <p className="text-sm text-gray-500 text-center">
+                Questions gratuites restantes : {2 - questionCount}
+              </p>
+            )}
           </div>
         </div>
-      ) : (
-        <form onSubmit={handleSubmit} className="p-4 border-t border-gray-200">
-          <div className="flex space-x-2">
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Posez votre question juridique..."
-              className="flex-1 border border-gray-300 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary"
-              disabled={isLoading}
-            />
-            <button
-              type="submit"
-              disabled={!input.trim() || isLoading}
-              className="bg-primary hover:bg-blue-800 text-white font-medium px-6 py-3 rounded-lg transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
-            >
-              <Send className="w-4 h-4" />
-            </button>
-          </div>
-        </form>
-      )}
-    </div>
+      </div>
+    </section>
   )
 }

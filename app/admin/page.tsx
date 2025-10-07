@@ -3,88 +3,107 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { redirect } from 'next/navigation'
 import AdminDashboard from '@/components/AdminDashboard'
+import Link from 'next/link'
 
 export default async function AdminPage() {
   const session = await getServerSession(authOptions)
 
-  // Vérifier si l'utilisateur est admin
-  if (!session || session.user.email !== process.env.ADMIN_EMAIL) {
+  if (!session || session.user?.role !== 'ADMIN') {
     redirect('/')
   }
 
-  // Récupérer les statistiques
-  const [
-    totalUsers,
-    totalConversations,
-    totalMessages,
-    usersThisMonth,
-    conversationsThisMonth,
-    recentUsers,
-    recentConversations
-  ] = await Promise.all([
-    prisma.user.count(),
-    prisma.conversation.count(),
-    prisma.message.count(),
-    prisma.user.count({
-      where: {
-        createdAt: {
-          gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1)
-        }
-      }
-    }),
-    prisma.conversation.count({
-      where: {
-        createdAt: {
-          gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1)
-        }
-      }
-    }),
-    prisma.user.findMany({
-      take: 10,
-      orderBy: { createdAt: 'desc' },
-      select: {
-        id: true,
-        nom: true,
-        prenom: true,
-        email: true,
-        createdAt: true
-      }
-    }),
-    prisma.conversation.findMany({
-      take: 10,
-      orderBy: { createdAt: 'desc' },
-      include: {
-        user: {
-          select: {
-            nom: true,
-            prenom: true,
-            email: true
-          }
-        },
-        messages: {
-          select: {
-            id: true
-          }
-        }
-      }
-    })
-  ])
+  // Statistiques globales
+  const totalUsers = await prisma.user.count()
+  const totalConversations = await prisma.conversation.count()
+  const totalMessages = await prisma.message.count({
+    where: { role: 'user' }
+  })
 
-  const stats = {
-    totalUsers,
-    totalConversations,
-    totalMessages,
-    usersThisMonth,
-    conversationsThisMonth
-  }
+  // Utilisateurs avec leurs statistiques
+  const users = await prisma.user.findMany({
+    include: {
+      conversations: {
+        include: {
+          messages: true
+        }
+      }
+    },
+    orderBy: {
+      createdAt: 'desc'
+    }
+  })
+
+  const userStats = users.map(user => ({
+    id: user.id,
+    civilite: user.civilite,
+    nom: user.nom,
+    prenom: user.prenom,
+    email: user.email,
+    telephone: user.telephone,
+    createdAt: user.createdAt,
+    conversationsCount: user.conversations.length,
+    questionsCount: user.conversations.reduce(
+      (acc, conv) => acc + conv.messages.filter(m => m.role === 'user').length,
+      0
+    )
+  }))
+
+  // Messages par jour (derniers 7 jours)
+  const sevenDaysAgo = new Date()
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
+
+  const recentMessages = await prisma.message.findMany({
+    where: {
+      role: 'user',
+      createdAt: {
+        gte: sevenDaysAgo
+      }
+    },
+    orderBy: {
+      createdAt: 'asc'
+    }
+  })
+
+  const messagesByDay = recentMessages.reduce((acc: any, msg) => {
+    const date = msg.createdAt.toISOString().split('T')[0]
+    acc[date] = (acc[date] || 0) + 1
+    return acc
+  }, {})
+
+  const chartData = Object.entries(messagesByDay).map(([date, count]) => ({
+    date,
+    questions: count as number
+  }))
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <AdminDashboard 
-        stats={stats}
-        recentUsers={recentUsers}
-        recentConversations={recentConversations}
-      />
+      {/* Header Admin */}
+      <header className="bg-primary text-white shadow-lg">
+        <div className="container mx-auto px-4 py-6">
+          <div className="flex justify-between items-center">
+            <div>
+              <h1 className="text-2xl font-bold">Back-office Admin</h1>
+              <p className="text-blue-100 mt-1">sosdivorce.fr</p>
+            </div>
+            <Link
+              href="/"
+              className="bg-white text-primary hover:bg-gray-100 px-4 py-2 rounded-lg font-medium transition"
+            >
+              ← Retour au site
+            </Link>
+          </div>
+        </div>
+      </header>
+
+      <main className="container mx-auto px-4 py-8">
+        <AdminDashboard
+          totalUsers={totalUsers}
+          totalConversations={totalConversations}
+          totalMessages={totalMessages}
+          userStats={userStats}
+          chartData={chartData}
+        />
+      </main>
     </div>
   )
 }
