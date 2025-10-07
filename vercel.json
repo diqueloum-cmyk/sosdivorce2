@@ -3,7 +3,7 @@
   "outputDirectory": ".next",
   "installCommand": "npm install --legacy-peer-deps",
   "functions": {
-    "src/app/api/chat/route.ts": {
+    "app/api/chat/route.ts": {
       "maxDuration": 60
     }
   }
