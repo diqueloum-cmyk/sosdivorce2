@@ -64,7 +64,7 @@ export default async function AdminPage() {
     }
   })
 
-  const messagesByDay = recentMessages.reduce((acc: any, msg) => {
+  const messagesByDay = recentMessages.reduce((acc: Record<string, number>, msg) => {
     const date = msg.createdAt.toISOString().split('T')[0]
     acc[date] = (acc[date] || 0) + 1
     return acc

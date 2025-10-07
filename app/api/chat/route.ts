@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
     })
 
     // Créer ou récupérer le thread OpenAI
-    let threadId = await getOrCreateThread(currentConversationId)
+    const threadId = await getOrCreateThread(currentConversationId)
     
     // Ajouter le message au thread
     await openai.beta.threads.messages.create(threadId, {
@@ -93,8 +93,7 @@ export async function POST(request: NextRequest) {
         })
 
         return NextResponse.json({
-          message: responseContent,
-          conversationId: currentConversationId
+          response: responseContent
         })
       }
     }

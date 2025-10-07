@@ -2,11 +2,9 @@
 
 import { useSession, signOut } from 'next-auth/react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 
 export default function Header() {
   const { data: session } = useSession()
-  const router = useRouter()
 
   const handleScrollTo = (id: string) => {
     const element = document.getElementById(id)

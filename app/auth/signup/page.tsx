@@ -58,8 +58,8 @@ export default function SignUpPage() {
         router.push('/')
         router.refresh()
       }
-    } catch (err: any) {
-      setError(err.message || 'Une erreur est survenue')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Une erreur est survenue')
     } finally {
       setLoading(false)
     }
