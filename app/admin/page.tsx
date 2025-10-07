@@ -8,7 +8,13 @@ import Link from 'next/link'
 export default async function AdminPage() {
   const session = await getServerSession(authOptions)
 
-  if (!session || session.user?.role !== 'ADMIN') {
+  if (!session) {
+    redirect('/')
+  }
+
+  // Type assertion pour accéder à la propriété role
+  const user = session.user as { role?: string }
+  if (user.role !== 'ADMIN') {
     redirect('/')
   }
 
